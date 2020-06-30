@@ -1,13 +1,18 @@
-import React from 'react';
+import React from "react";
 import { hot } from "react-hot-loader/root";
-import Map3DView from './Map3DView';
 
-import './App.css';
+import Map3DView from "./Map3DView";
+import EntityModel from "./EntityModel";
+import EntityWall from "./assets/EntityWall";
+
+import "./App.css";
 
 function App() {
   return (
     <div className="App">
-        <Map3DView />
+      {/* <Map3DView /> */}
+      {/* <EntityModel /> */}
+      <EntityWall />
     </div>
   );
 }
