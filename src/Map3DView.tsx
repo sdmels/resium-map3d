@@ -199,7 +199,7 @@ const Map3DView = () => {
         stopTime={stopTime.clone()}
         currentTime={startTime.clone()}
         clockRange={ClockRange.LOOP_STOP}
-        multiplier={10}
+        multiplier={1}
         shouldAnimate={true}
       />
 
