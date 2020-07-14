@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 
 import {
   Viewer as CesiumViewer,
@@ -16,12 +16,12 @@ import {
   TimeInterval,
   Cartesian4,
   TimeIntervalCollection,
-  PolylineArrowMaterialProperty,
   Color,
+  sampleTerrainMostDetailed,
+  Cartographic,
 } from "cesium";
 
 import {
-  CesiumComponentRef,
   Viewer,
   Globe,
   SkyAtmosphere,
@@ -45,12 +45,11 @@ const terrainProvider = createWorldTerrain({
 
 const AirModelOption = {
   uri: AirBus,
-  minimumPixelSize: 64,
-  scale: 20,
+  minimumPixelSize: 8,
+  scale: 1,
 };
 
 const LogPx4 = () => {
-  const mapRef = useRef<CesiumComponentRef<CesiumViewer>>(null);
   const [takeOff, setTakeOff] = useState<{
     alt: number;
     position: Cartesian3;
@@ -58,12 +57,15 @@ const LogPx4 = () => {
 
   const [startTime, setStartTime] = useState<JulianDate>();
   const [stopTime, setStopTime] = useState<JulianDate>();
-  const [bootTime, setBootTime] = useState<JulianDate>();
+  // const [bootTime, setBootTime] = useState<JulianDate>();
+
+  let entityRef = useRef<any>();
+  let viewer: CesiumViewer | undefined | null;
 
   useEffect(() => {
     Math.setRandomNumberSeed(3);
     setStartTime(JulianDate.fromIso8601("2019-05-13T16:38:49.599987+00:00"));
-    setBootTime(JulianDate.fromIso8601("2019-05-13T16:23:10.778107+00:00"));
+    // setBootTime(JulianDate.fromIso8601("2019-05-13T16:23:10.778107+00:00"));
     setStopTime(JulianDate.fromIso8601("2019-05-13T16:46:41.002275+00:00"));
     setTakeOff({
       alt: 20.952,
@@ -72,34 +74,43 @@ const LogPx4 = () => {
   }, []);
 
   useEffect(() => {
-    if (mapRef.current && startTime && stopTime) {
-      const viewer = mapRef.current?.cesiumElement;
+    if (viewer && startTime && stopTime && takeOff) {
+      viewer.animation.viewModel.setShuttleRingTicks([
+        0.01,
+        0.02,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1,
+        2,
+        5,
+        10,
+        15,
+        30,
+        60,
+        100,
+        300,
+        600,
+        1000,
+      ]);
 
-      if (viewer) {
-        viewer.animation.viewModel.setShuttleRingTicks([
-          0.01,
-          0.02,
-          0.05,
-          0.1,
-          0.25,
-          0.5,
-          1,
-          2,
-          5,
-          10,
-          15,
-          30,
-          60,
-          100,
-          300,
-          600,
-          1000,
-        ]);
+      viewer.timeline.zoomTo(startTime, stopTime);
 
-        viewer.timeline.zoomTo(startTime, stopTime);
-      }
+      const takeOffPositionInCartographic = Cartographic.fromCartesian(
+        takeOff.position
+      );
+      sampleTerrainMostDetailed(viewer.terrainProvider, [
+        takeOffPositionInCartographic,
+      ]).then((updatedPositions) => {
+        const groundOffset = takeOffPositionInCartographic.height - takeOff.alt;
+        const newPosition = computePositionProperty(groundOffset + 2);
+        // @ts-ignore
+        entityRef.position = newPosition;
+      });
     }
-  }, [mapRef, startTime, stopTime]);
+    // eslint-disable-next-line
+  }, [startTime, stopTime, takeOff]);
 
   const computePositionProperty = (alt_offset: number): any => {
     const property = new SampledPositionProperty();
@@ -133,6 +144,7 @@ const LogPx4 = () => {
     Matrix4.getMatrix3(transform_matrix, rotation_matrix);
 
     const northFacing = Matrix3.fromRotationZ(Math.toRadians(90.0));
+
     rotation_matrix = Matrix3.multiply(
       rotation_matrix,
       northFacing,
@@ -232,24 +244,17 @@ const LogPx4 = () => {
   const flightModesProperty = computeFlightModesProperty();
   const manualControlSetpointsProperty = computeManualControlSetpointsProperty();
 
-  console.log(
-    positionProperty,
-    orientationProperty,
-    flightModesProperty,
-    manualControlSetpointsProperty
-  );
-
   if (
     !(
       startTime &&
       stopTime &&
-      bootTime &&
       positionProperty &&
       orientationProperty &&
       flightModesProperty &&
       manualControlSetpointsProperty
     )
   ) {
+    console.log("display none");
     return null;
   }
 
@@ -261,7 +266,9 @@ const LogPx4 = () => {
         infoBox={false}
         selectionIndicator={false}
         shouldAnimate={true}
-        ref={mapRef}
+        ref={(evt) => {
+          viewer = evt && evt.cesiumElement;
+        }}
         navigationInstructionsInitiallyVisible={false}
       >
         <Clock
@@ -271,6 +278,9 @@ const LogPx4 = () => {
           clockRange={ClockRange.LOOP_STOP}
           multiplier={1}
           shouldAnimate={false}
+          onTick={(e) => {
+            console.log("tick", e);
+          }}
         />
 
         <Globe enableLighting={true} depthTestAgainstTerrain={true} />
@@ -278,6 +288,10 @@ const LogPx4 = () => {
         <SkyAtmosphere brightnessShift={0.2} />
 
         <Entity
+          ref={(e) => {
+            // @ts-ignore
+            entityRef = e && e.cesiumElement;
+          }}
           availability={
             new TimeIntervalCollection([
               new TimeInterval({ start: startTime, stop: stopTime }),
@@ -294,14 +308,9 @@ const LogPx4 = () => {
 
           <PathGraphics
             resolution={1}
-            material={
-              new PolylineArrowMaterialProperty({
-                // @ts-ignore
-                glowPower: 0.1,
-                color: Color.YELLOW,
-              })
-            }
+            material={Color.YELLOW}
             width={10}
+            show={true}
           />
         </Entity>
       </Viewer>
