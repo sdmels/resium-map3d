@@ -1,25 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
-
-import {
-  Viewer as CesiumViewer,
-  Math,
-  createWorldTerrain,
-  JulianDate,
-  Cartesian3,
-  ClockRange,
-  SampledPositionProperty,
-  TimeIntervalCollectionProperty,
-  Transforms,
-  Matrix3,
-  Matrix4,
-  Quaternion,
-  TimeInterval,
-  Cartesian4,
-  TimeIntervalCollection,
-  Color,
-  sampleTerrainMostDetailed,
-  Cartographic,
-} from "cesium";
+import React, { useState, useEffect } from "react";
 
 import {
   Viewer,
@@ -31,218 +10,313 @@ import {
   PathGraphics,
 } from "resium";
 
-import AirBus from "./assets/models/Cesium_Air.glb";
+import {
+  Viewer as CesiumViewer,
+  createWorldTerrain,
+  Math,
+  JulianDate,
+  ClockRange,
+  TimeIntervalCollectionProperty,
+  Cartesian3,
+  Cartographic,
+  Transforms,
+  Matrix3,
+  Matrix4,
+  Quaternion,
+  TimeInterval,
+  SampledPositionProperty,
+  Cartesian4,
+  TimeIntervalCollection,
+  Color,
+  HeadingPitchRange,
+} from "cesium";
 
-import flight_modes from "./constant/LogConst";
-import attitude_data from "./constant/attitude_data";
+import flight_modes from "./constant/flight_modes";
 import manual_control_setpoints from "./constant/manual_control_setpoints";
 import position_data from "./constant/Position";
+import attitude_data from "./constant/attitude_data";
+
+import Drone from "./assets/models/drone.glb";
 
 const terrainProvider = createWorldTerrain({
   requestVertexNormals: true,
   requestWaterMask: true,
 });
 
-const AirModelOption = {
-  uri: AirBus,
-  minimumPixelSize: 8,
-  scale: 1,
+const model_scale_factor = 1;
+
+const shutterRingTicks = [
+  0.01,
+  0.02,
+  0.05,
+  0.1,
+  0.25,
+  0.5,
+  1,
+  2,
+  5,
+  10,
+  15,
+  30,
+  60,
+  100,
+  300,
+  600,
+  1000,
+];
+
+const pad = (num: number, size: number) => {
+  let s = num + "";
+  while (s.length < size) {
+    s = "0" + s;
+  }
+  return s;
 };
 
-const LogPx4 = () => {
-  const [takeOff, setTakeOff] = useState<{
-    alt: number;
-    position: Cartesian3;
-  }>();
+const format_timestamp = (boot_time_sec: number, show_ms: boolean) => {
+  let ms = window.Math.round(boot_time_sec * 1000);
+  let sec = window.Math.floor(ms / 1000);
+  let minutes = window.Math.floor(sec / 60);
+  const hours = window.Math.floor(minutes / 60);
+  let ret_val;
+  ms = ms % 1000;
+  sec = sec % 60;
+  minutes = minutes % 60;
+  if (hours > 0) {
+    ret_val = hours + ":" + pad(minutes, 2) + ":" + pad(sec, 2);
+  } else {
+    ret_val = minutes + ":" + pad(sec, 2);
+  }
+  if (show_ms) {
+    ret_val = ret_val + "." + pad(ms, 3);
+  }
+  return ret_val;
+};
 
+interface TakeOff {
+  altitude: number;
+  position: {
+    longitude: number;
+    latitude: number;
+    height: number;
+  };
+}
+
+const default_model_scale = 20;
+
+const LogPx4 = () => {
+  const [takeOff, setTakeOff] = useState<TakeOff>();
+
+  const [viewerElement, setViewerElement] = useState<CesiumViewer>();
   const [startTime, setStartTime] = useState<JulianDate>();
   const [stopTime, setStopTime] = useState<JulianDate>();
-  // const [bootTime, setBootTime] = useState<JulianDate>();
+  const [bootTime, setBootTime] = useState<JulianDate>();
 
-  let entityRef = useRef<any>();
-  let viewer: CesiumViewer | undefined | null;
+  const [positionProperty, setPositionProperty] = useState<
+    SampledPositionProperty
+  >();
+  const [orientationProperty, setOrientationProperty] = useState<
+    TimeIntervalCollectionProperty
+  >();
+  const [flightModesProperty, setFlightModesProperty] = useState<
+    TimeIntervalCollectionProperty
+  >();
+  const [
+    manualControlSetpointsProperty,
+    setManualControlSetpointsProperty,
+  ] = useState<TimeIntervalCollectionProperty>();
 
   useEffect(() => {
     Math.setRandomNumberSeed(3);
     setStartTime(JulianDate.fromIso8601("2019-05-13T16:38:49.599987+00:00"));
-    // setBootTime(JulianDate.fromIso8601("2019-05-13T16:23:10.778107+00:00"));
     setStopTime(JulianDate.fromIso8601("2019-05-13T16:46:41.002275+00:00"));
+    setBootTime(JulianDate.fromIso8601("2019-05-13T16:23:10.778107+00:00"));
+
     setTakeOff({
-      alt: 20.952,
-      position: Cartesian3.fromDegrees(151.210757, -33.861338, 300),
+      altitude: 20.952,
+      position: Cartographic.fromDegrees(-117.0763111, 32.387429),
     });
   }, []);
 
   useEffect(() => {
-    if (viewer && startTime && stopTime && takeOff) {
-      viewer.animation.viewModel.setShuttleRingTicks([
-        0.01,
-        0.02,
-        0.05,
-        0.1,
-        0.25,
-        0.5,
-        1,
-        2,
-        5,
-        10,
-        15,
-        30,
-        60,
-        100,
-        300,
-        600,
-        1000,
-      ]);
+    if (viewerElement) {
+      viewerElement.animation.viewModel.setShuttleRingTicks(shutterRingTicks);
 
-      viewer.timeline.zoomTo(startTime, stopTime);
-
-      const takeOffPositionInCartographic = Cartographic.fromCartesian(
-        takeOff.position
+      document.addEventListener(
+        "keyup",
+        (e) => {
+          if (e.keyCode === 32) {
+            viewerElement.clock.shouldAnimate = !viewerElement.clock
+              .shouldAnimate;
+          } else if (e.keyCode === 37) {
+            viewerElement.clock.multiplier =
+              viewerElement.clock.multiplier > 0
+                ? -viewerElement.clock.multiplier
+                : viewerElement.clock.multiplier;
+            viewerElement.clock.shouldAnimate = true;
+          } else if (e.keyCode === 38) {
+            viewerElement.clock.multiplier *= 1.5;
+          } else if (e.keyCode === 39) {
+            viewerElement.clock.multiplier =
+              viewerElement.clock.multiplier < 0
+                ? -viewerElement.clock.multiplier
+                : viewerElement.clock.multiplier;
+            viewerElement.clock.shouldAnimate = true;
+          } else if (e.keyCode === 40) {
+            viewerElement.clock.multiplier /= 1.5;
+          }
+        },
+        false
       );
-      sampleTerrainMostDetailed(viewer.terrainProvider, [
-        takeOffPositionInCartographic,
-      ]).then((updatedPositions) => {
-        const groundOffset = takeOffPositionInCartographic.height - takeOff.alt;
-        const newPosition = computePositionProperty(groundOffset + 2);
-        // @ts-ignore
-        entityRef.position = newPosition;
-      });
+
+      viewerElement.zoomTo(
+        viewerElement.entities,
+        new HeadingPitchRange(0, Math.toRadians(-90), 120)
+      );
+    }
+
+    return () => {
+      document.removeEventListener("keyup", () =>
+        console.log("key up event removed Listener")
+      );
+      viewerElement?.destroy();
+    };
+  }, [viewerElement]);
+
+  useEffect(() => {
+    if (bootTime && viewerElement) {
+      const animationViewModel = viewerElement.animation.viewModel;
+
+      animationViewModel.dateFormatter = () => "";
+
+      animationViewModel.timeFormatter = (date, viewModel) => {
+        const boot_time = JulianDate.secondsDifference(date, bootTime);
+        return format_timestamp(boot_time, true);
+      };
+    }
+  }, [viewerElement, bootTime]);
+
+  useEffect(() => {
+    if (startTime && stopTime && viewerElement) {
+      viewerElement.timeline.zoomTo(startTime, stopTime);
     }
     // eslint-disable-next-line
-  }, [startTime, stopTime, takeOff]);
+  }, [startTime, stopTime]);
 
-  const computePositionProperty = (alt_offset: number): any => {
-    const property = new SampledPositionProperty();
+  useEffect(() => {
+    if (takeOff) {
+      const computeOrientationProperty = () => {
+        const orientationProperty = new TimeIntervalCollectionProperty();
+        let rotation_matrix = new Matrix3();
 
-    position_data.forEach((cur_pos: any) => {
-      const time = JulianDate.fromIso8601(cur_pos[0]);
-      const position = Cartesian3.fromDegrees(
-        cur_pos[1],
-        cur_pos[2],
-        cur_pos[3] + alt_offset
-      );
-      property.addSample(time, position);
-    });
-
-    return property;
-  };
-
-  const computeOrientationProperty = () => {
-    if (!takeOff) {
-      return null;
-    }
-    const orientationProperty = new TimeIntervalCollectionProperty();
-    const origin = Cartesian3.fromRadians(
-      takeOff.position.x,
-      takeOff.position.y
-    );
-
-    const transform_matrix = Transforms.eastNorthUpToFixedFrame(origin);
-    let rotation_matrix = new Matrix3();
-
-    Matrix4.getMatrix3(transform_matrix, rotation_matrix);
-
-    const northFacing = Matrix3.fromRotationZ(Math.toRadians(90.0));
-
-    rotation_matrix = Matrix3.multiply(
-      rotation_matrix,
-      northFacing,
-      new Matrix3()
-    );
-
-    const quaternion_enu_to_ecef = Quaternion.fromRotationMatrix(
-      rotation_matrix
-    );
-
-    attitude_data.forEach((cur_attitude: any, index: number) => {
-      const time = JulianDate.fromIso8601(cur_attitude[0]);
-      const q = new Quaternion(
-        cur_attitude[1],
-        -cur_attitude[2],
-        -cur_attitude[3],
-        cur_attitude[4]
-      );
-      const orientation = new Quaternion();
-      Quaternion.multiply(quaternion_enu_to_ecef, q, orientation);
-
-      if (index < attitude_data.length - 1) {
-        const next_attitude = attitude_data[index + 1];
-        if (next_attitude) {
-          const time_att_next = JulianDate.fromIso8601(next_attitude[0] as any);
-          const timeInterval = new TimeInterval({
-            start: time,
-            stop: time_att_next,
-            isStartIncluded: true,
-            isStopIncluded: false,
-            data: orientation,
-          });
-          orientationProperty.intervals.addInterval(timeInterval);
-        }
-      }
-    });
-
-    return orientationProperty;
-  };
-
-  const computeFlightModesProperty = () => {
-    const flightModesProperty = new TimeIntervalCollectionProperty();
-
-    flight_modes.forEach((cur_flight_mode: any, index: number) => {
-      const cur_time = JulianDate.fromIso8601(cur_flight_mode[0]);
-      const next_flight_mode = flight_modes[index + 1];
-      if (next_flight_mode) {
-        const next_time = JulianDate.fromIso8601(next_flight_mode[0]);
-
-        const timeInterval = new TimeInterval({
-          start: cur_time,
-          stop: next_time,
-          isStartIncluded: true,
-          isStopIncluded: false,
-          data: cur_flight_mode[1],
-        });
-        flightModesProperty.intervals.addInterval(timeInterval);
-      }
-    });
-
-    return flightModesProperty;
-  };
-
-  const computeManualControlSetpointsProperty = () => {
-    const manualControlSetpointsProperty = new TimeIntervalCollectionProperty();
-
-    manual_control_setpoints.forEach((cur_sp: any, index: number) => {
-      const cur_time = JulianDate.fromIso8601(cur_sp[0]);
-      const next_sp = flight_modes[index + 1];
-      if (next_sp) {
-        const next_time = JulianDate.fromIso8601(next_sp[0]);
-
-        const manual_control_setpoint = Cartesian4.fromElements(
-          cur_sp[1],
-          cur_sp[2],
-          cur_sp[3],
-          cur_sp[4]
+        const origin = Cartesian3.fromRadians(
+          takeOff.position.longitude,
+          takeOff.position.latitude
         );
 
-        var timeInterval = new TimeInterval({
-          start: cur_time,
-          stop: next_time,
-          isStartIncluded: true,
-          isStopIncluded: false,
-          data: manual_control_setpoint,
-        });
+        const transform_matrix = Transforms.eastNorthUpToFixedFrame(origin);
 
-        manualControlSetpointsProperty.intervals.addInterval(timeInterval);
-      }
-    });
+        Matrix4.getMatrix3(transform_matrix, rotation_matrix);
 
-    return manualControlSetpointsProperty;
-  };
+        const northFacing = Matrix3.fromRotationZ(Math.toRadians(90.0));
+        rotation_matrix = Matrix3.multiply(
+          rotation_matrix,
+          northFacing,
+          new Matrix3()
+        );
 
-  const positionProperty = computePositionProperty(0);
-  const orientationProperty = computeOrientationProperty();
-  const flightModesProperty = computeFlightModesProperty();
-  const manualControlSetpointsProperty = computeManualControlSetpointsProperty();
+        const q_enu_to_ecef = Quaternion.fromRotationMatrix(rotation_matrix);
+
+        for (let i = 0; i < attitude_data.length; ++i) {
+          const cur_attitude = attitude_data[i];
+
+          const time_att = JulianDate.fromIso8601(cur_attitude[0] as string);
+
+          const q = new Quaternion(
+            cur_attitude[1] as number,
+            -cur_attitude[2],
+            -cur_attitude[3],
+            cur_attitude[4] as number
+          );
+          const orientation = new Quaternion();
+          Quaternion.multiply(q_enu_to_ecef, q, orientation);
+
+          if (i < attitude_data.length - 1) {
+            const next_attitude = attitude_data[i + 1];
+            const time_att_next = JulianDate.fromIso8601(
+              next_attitude[0] as string
+            );
+            const timeInterval = new TimeInterval({
+              start: time_att,
+              stop: time_att_next,
+              isStartIncluded: true,
+              isStopIncluded: false,
+              data: orientation,
+            });
+            orientationProperty.intervals.addInterval(timeInterval);
+          }
+        }
+
+        return orientationProperty;
+      };
+
+      const computePositionProperty = (altitude_offset: number) => {
+        const property = new SampledPositionProperty();
+        let position;
+
+        for (let i = 0; i < position_data.length; ++i) {
+          const cur_pos = position_data[i];
+          const time = JulianDate.fromIso8601(cur_pos[0] as string);
+          position = Cartesian3.fromDegrees(
+            cur_pos[1] as number,
+            cur_pos[2] as number,
+            (cur_pos[3] as number) + altitude_offset
+          );
+
+          property.addSample(time, position);
+        }
+        return property;
+      };
+
+      const createTimeIntervalCollectionProperty = (data: any) => {
+        const timeIntervalCollectionProperty = new TimeIntervalCollectionProperty();
+
+        for (let i = 0; i < data.length - 1; ++i) {
+          const cur_sp = data[i];
+          const next_sp = data[i + 1];
+          const cur_time = JulianDate.fromIso8601(cur_sp[0] as string);
+          const next_time = JulianDate.fromIso8601(next_sp[0] as string);
+          const manual_control_setPoint = Cartesian4.fromElements(
+            cur_sp[1] as number,
+            cur_sp[2] as number,
+            cur_sp[3] as number,
+            cur_sp[4] as number
+          );
+
+          const timeInterval = new TimeInterval({
+            start: cur_time,
+            stop: next_time,
+            isStartIncluded: true,
+            isStopIncluded: false,
+            data: manual_control_setPoint,
+          });
+
+          timeIntervalCollectionProperty.intervals.addInterval(timeInterval);
+        }
+
+        return timeIntervalCollectionProperty;
+      };
+
+      setOrientationProperty(computeOrientationProperty());
+      setPositionProperty(computePositionProperty(0));
+      setFlightModesProperty(
+        createTimeIntervalCollectionProperty(flight_modes)
+      );
+      setManualControlSetpointsProperty(
+        createTimeIntervalCollectionProperty(manual_control_setpoints)
+      );
+    }
+  }, [takeOff]);
 
   if (
     !(
@@ -254,67 +328,52 @@ const LogPx4 = () => {
       manualControlSetpointsProperty
     )
   ) {
-    console.log("display none");
     return null;
   }
 
   return (
-    <div>
-      <Viewer
-        full
-        terrainProvider={terrainProvider}
-        infoBox={false}
-        selectionIndicator={false}
-        shouldAnimate={true}
-        ref={(evt) => {
-          viewer = evt && evt.cesiumElement;
-        }}
-        navigationInstructionsInitiallyVisible={false}
+    <Viewer
+      full
+      terrainProvider={terrainProvider}
+      infoBox={false}
+      selectionIndicator={false}
+      navigationInstructionsInitiallyVisible={false}
+      ref={(evt) => setViewerElement(evt?.cesiumElement)}
+    >
+      <Globe enableLighting={false} depthTestAgainstTerrain={true} />
+      <SkyAtmosphere brightnessShift={0.2} />
+
+      <Clock
+        startTime={startTime.clone()}
+        stopTime={stopTime.clone()}
+        currentTime={startTime.clone()}
+        clockRange={ClockRange.LOOP_STOP}
+        multiplier={1}
+        shouldAnimate={false}
+      />
+
+      <Entity
+        availability={
+          new TimeIntervalCollection([
+            new TimeInterval({ start: startTime, stop: stopTime }),
+          ])
+        }
+        position={positionProperty}
+        orientation={orientationProperty}
       >
-        <Clock
-          startTime={startTime?.clone()}
-          stopTime={stopTime.clone()}
-          currentTime={startTime.clone()}
-          clockRange={ClockRange.LOOP_STOP}
-          multiplier={1}
-          shouldAnimate={false}
-          onTick={(e) => {
-            console.log("tick", e);
-          }}
+        <ModelGraphics
+          uri={Drone}
+          minimumPixelSize={64}
+          scale={default_model_scale * model_scale_factor}
         />
-
-        <Globe enableLighting={true} depthTestAgainstTerrain={true} />
-
-        <SkyAtmosphere brightnessShift={0.2} />
-
-        <Entity
-          ref={(e) => {
-            // @ts-ignore
-            entityRef = e && e.cesiumElement;
-          }}
-          availability={
-            new TimeIntervalCollection([
-              new TimeInterval({ start: startTime, stop: stopTime }),
-            ])
-          }
-          position={positionProperty}
-          orientation={orientationProperty}
-        >
-          <ModelGraphics
-            uri={AirModelOption.uri}
-            minimumPixelSize={AirModelOption.minimumPixelSize}
-            scale={AirModelOption.scale}
-          />
-
-          <PathGraphics
-            resolution={1}
-            material={Color.YELLOW}
-            width={10}
-            show={true}
-          />
-        </Entity>
-      </Viewer>
-    </div>
+        <PathGraphics
+          resolution={1}
+          material={Color.YELLOW}
+          width={10}
+          show={true}
+        />
+      </Entity>
+    </Viewer>
   );
 };
 
